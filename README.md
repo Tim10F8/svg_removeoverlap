@@ -1,7 +1,9 @@
 
 # svg_removeoverlap
 
-CLI tool & Python lib to remove overlap in SVG
+CLI tool & Python lib to remove overlap in SVG. 
+
+This Python script is designed to remove overlapping shapes in an SVG (Scalable Vector Graphics) file using the picosvg library. It provides several options to control the removal process, such as using CairoSVG for SVG conversion, converting SVG to picosvg, keeping white fill shapes, and skipping specific fill values.
 
 ## Installation
 
@@ -15,7 +17,7 @@ You also need to install external dependencies. On macOS:
 brew install cairo skia
 ```
 
-## Usage
+## Usage in CLI
 
 ```bash
 svg_removeoverlap input.svg output.svg
@@ -68,13 +70,15 @@ NOTES
     You can also use flags syntax for POSITIONAL ARGUMENTS
 ```
 
-## Description
+## Usage in Python
 
-This tool is a Python module for removing overlaps from SVG files. The module consists of several Python files, namely `__init__.py`, `__main__.py`, and `remover.py`.
-
-The `__init__.py` file imports necessary libraries and defines the package name and version. The `__main__.py` file is the entry point of the tool, and it defines a function `remove_overlaps` that takes input SVG and outputs a new SVG file with overlaps removed. The `remover.py` file contains the core functionality of the tool, which includes loading and parsing SVG files, filtering shapes, and removing overlaps.
-
-To use this tool, you need to have Python 3.8 or later installed on your system. Then you can install the package using pip and run the `remove_overlaps` function from the command line. You need to specify the input SVG file path and output SVG file path as arguments to the function. You can also provide additional optional arguments, such as `sequential`, `keep_white`, `cairo`, `picofy`, and `verbose`, to modify the behavior of the tool.
+```python
+from svg_removeoverlap.remover import RemoveOverlapsSVG
+remover = RemoveOverlapsSVG(cairo=True, picofy=False, keep_white=False, verbose=True)
+remover.load_svg(input_path)
+remover.remove(sequential=False)
+remover.save_svg(output_path)
+```
 
 ## License
 

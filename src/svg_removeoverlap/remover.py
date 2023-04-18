@@ -10,13 +10,19 @@ from lxml import etree
 from tqdm import tqdm
 import tinycss2
 
-
 logger = logging.getLogger(__name__)
 
 from lxml import etree
 
+def get_css_fill(style: str) -> str:
+    """Extract the fill value from a CSS style string.
 
-def get_css_fill(style):
+    Args:
+        style (str): The CSS style string.
+
+    Returns:
+        str: The fill value found in the CSS style string.
+    """
     return (
         next(
             (
@@ -30,7 +36,6 @@ def get_css_fill(style):
         .lower()
     )
 
-
 class RemoveOverlapsSVG:
     def __init__(
         self,
@@ -40,6 +45,15 @@ class RemoveOverlapsSVG:
         skip_svg_fills: List[str] = None,
         verbose: bool = False,
     ) -> None:
+        """Initialize RemoveOverlapsSVG class.
+
+        Args:
+            cairo (bool, optional): Use CairoSVG for SVG conversion. Defaults to True.
+            picofy (bool, optional): Convert SVG to picosvg. Defaults to False.
+            keep_white (bool, optional): Keep white fill shapes. Defaults to False.
+            skip_svg_fills (List[str], optional): List of fill values to skip. Defaults to a list of common white and transparent fill values.
+            verbose (bool, optional): Enable verbose logging. Defaults to False.
+        """
         self.skip_svg_fills: List[str] = skip_svg_fills or [
             "white",
             "rgb(255,255,255)",
@@ -62,7 +76,15 @@ class RemoveOverlapsSVG:
         self.svg_content: str = None
         self.pico: picosvg.svg.SVG = None
 
-    def _protect_clipPaths(self, svg_bytes):
+    def _protect_clipPaths(self, svg_bytes: bytes) -> str:
+        """Protect clipPaths by setting their fill to transparent.
+
+        Args:
+            svg_bytes (bytes): SVG content as bytes.
+
+        Returns:
+            str: Modified SVG content as string.
+        """
         root = etree.fromstring(svg_bytes)
         clip_paths = root.findall(".//{http://www.w3.org/2000/svg}clipPath")
         for clip_path in clip_paths:
@@ -73,7 +95,8 @@ class RemoveOverlapsSVG:
             "utf-8"
         )
 
-    def _prep_svg_cairo(self) -> str:
+    def _prep_svg_cairo(self) -> None:
+        """Prepare the SVG content for CairoSVG conversion."""
         from cairosvg.surface import SVGSurface
 
         self.svg_content = self._protect_clipPaths(
@@ -81,11 +104,21 @@ class RemoveOverlapsSVG:
         )
 
     def save_svg(self, output_path: Union[str, Path]) -> None:
+        """Save the SVG content to a file.
+
+        Args:
+            output_path (Union[str, Path]): The path of the output file.
+        """
         logger.info(f"Saving {output_path}...")
         with open(output_path, "w") as output_file:
             output_file.write(self.svg_content)
 
     def load_svg(self, input_path: Union[str, Path]) -> None:
+        """Load an SVG file and read its content.
+
+        Args:
+            input_path (Union[str, Path]): The path of the input file.
+        """
         logger.info(f"Reading {input_path}...")
         with open(input_path, "r") as svg_file:
             self.svg_content = svg_file.read()
@@ -93,20 +126,28 @@ class RemoveOverlapsSVG:
             self._prep_svg_cairo()
 
     def _parse_svg(self):
+        """Parse the SVG content and create an SVG object using picosvg."""
         logger.info("Parsing SVG...")
         self.pico = picosvg.svg.SVG.fromstring(self.svg_content)
 
     def _picofy_svg(self):
+        """Convert the SVG object to a picosvg representation if the 'picofy' option is enabled."""
         if self.picofy:
             logger.info("Picofying SVG...")
             self.pico = self.pico.topicosvg()
             self.svg_content = self.pico.tostring(pretty_print=False)
 
     def _prep_pico(self):
+        """Prepare the picosvg object by parsing the SVG content and optionally converting it to a picosvg representation."""
         self._parse_svg()
         self._picofy_svg()
 
     def _filter_pico_shapes(self):
+        """Filter the shapes in the picosvg object based on their fill values.
+
+        Returns:
+            List[picosvg.svg.Shapes]: A list of filtered shapes.
+        """
         shapes = []
         for shape in tqdm(
             self.pico.shapes(),
@@ -118,10 +159,13 @@ class RemoveOverlapsSVG:
                 shapes.append(shape)
         return shapes
 
-    def remove_overlaps_pico(
-        self,
-        sequential: bool = False,
-    ) -> None:
+
+    def remove_overlaps_pico(self, sequential: bool = False) -> None:
+        """Remove overlaps in the SVG using picosvg.
+
+        Args:
+            sequential (bool, optional): Remove overlaps sequentially. Defaults to False.
+        """
         self._prep_pico()
         shapes = self._filter_pico_shapes()
         clip_rule = "nonzero"
@@ -152,9 +196,11 @@ class RemoveOverlapsSVG:
         self.pico = new_svg
         self.svg_content = self.pico.tostring(pretty_print=True)
 
-    def remove(
-        self,
-        sequential: bool = False,
-    ) -> None:
+    def remove(self, sequential: bool = False) -> None:
+        """Remove overlaps in the SVG.
+
+        Args:
+            sequential (bool, optional): Remove overlaps sequentially. Defaults to False.
+        """
         self.remove_overlaps_pico(sequential=sequential)
 

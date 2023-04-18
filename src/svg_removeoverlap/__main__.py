@@ -13,7 +13,7 @@ def remove_overlaps(
     sequential: bool = False,
     keep_white: bool = False,
     cairo: bool = True,
-    picofy: bool = False,
+    picofy: bool = True,
     verbose: bool = False,
 ) -> None:
     """
@@ -25,7 +25,7 @@ def remove_overlaps(
         sequential (bool, optional): If True, process shapes sequentially instead of all at once. Defaults to False.
         keep_white (bool, optional): If True, keep white shapes. Defaults to False.
         cairo (bool, optional): If True, use cairo to convert input SVG. Defaults to True.
-        picofy (bool, optional): If True, use picosvg to simplify input SVG. Defaults to False.
+        picofy (bool, optional): If True, use picosvg to simplify input SVG. Defaults to True.
         verbose (bool, optional): If True, display detailed logging information. Defaults to False.
     """
     remover = RemoveOverlapsSVG(
