@@ -31,7 +31,7 @@ vcpkg install libffi:x64-windows
 vcpkg install pkg-config:x64-windows
 ```
 
-With [Chocolatey](https://chocolatey.org/):
+With [Chocolatey](https://chocolatey.org/install):
 
 ```
 choco install cairo
