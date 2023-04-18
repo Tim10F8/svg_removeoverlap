@@ -11,11 +11,39 @@ This Python script is designed to remove overlapping shapes in an SVG (Scalable 
 python3 -m pip install --upgrade git+https://github.com/twardoch/svg_removeoverlap
 ```
 
-You also need to install external dependencies. On macOS: 
+You also need to install external dependencies. 
+
+### On macOS
+
+With [Homebrew](https://brew.sh/)
 
 ```bash
-brew install cairo skia
+brew install cairo libffi pkg-config
 ```
+
+### On Windows 
+
+With [vcpkg](https://github.com/microsoft/vcpkg):
+
+```
+vcpkg install cairo:x64-windows
+vcpkg install libffi:x64-windows
+vcpkg install pkg-config:x64-windows
+```
+
+With [Chocolatey](https://chocolatey.org/):
+
+```
+choco install cairo
+choco install pkgconfiglite
+```
+
+### On Ubuntu
+
+```bash
+sudo apt-get install libcairo2-dev libffi-dev pkg-config
+```
+
 
 ## Usage in CLI
 
