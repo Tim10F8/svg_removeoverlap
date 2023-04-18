@@ -23,18 +23,21 @@ def get_css_fill(style: str) -> str:
     Returns:
         str: The fill value found in the CSS style string.
     """
-    return (
-        next(
-            (
-                token.value[0].serialize()
-                for token in tinycss2.parse_declaration_list(style)
-                if hasattr(token, "name") and token.name == "fill"
-            ),
-            "",
+    try:
+        return (
+            next(
+                (
+                    token.value[0].serialize()
+                    for token in tinycss2.parse_declaration_list(style)
+                    if hasattr(token, "name") and token.name == "fill"
+                ),
+                "",
+            )
+            .replace(" ", "")
+            .lower()
         )
-        .replace(" ", "")
-        .lower()
-    )
+    except ValueError:
+        return ""
 
 class RemoveOverlapsSVG:
     def __init__(
@@ -62,8 +65,6 @@ class RemoveOverlapsSVG:
             "hsl(0,0%,100%)",
             "hsla(0,0%,100%,1)",
             "transparent",
-            "rgba(0,0,0,0)",
-            "hsla(0,0%,0%,0)",
             "#ffffff",
             "none",
         ]
@@ -85,7 +86,10 @@ class RemoveOverlapsSVG:
         Returns:
             str: Modified SVG content as string.
         """
-        root = etree.fromstring(svg_bytes)
+        try:
+            root = etree.fromstring(svg_bytes)
+        except (etree.XMLSyntaxError, etree.LxmlError) as err:
+            raise ValueError(f"Invalid SVG content: {err}") from err
         clip_paths = root.findall(".//{http://www.w3.org/2000/svg}clipPath")
         for clip_path in clip_paths:
             paths = clip_path.findall("{http://www.w3.org/2000/svg}path")
@@ -99,9 +103,16 @@ class RemoveOverlapsSVG:
         """Prepare the SVG content for CairoSVG conversion."""
         from cairosvg.surface import SVGSurface
 
-        self.svg_content = self._protect_clipPaths(
-            SVGSurface.convert(bytestring=bytes(self.svg_content, encoding="utf-8"))
-        )
+        try:
+            self.svg_content = self._protect_clipPaths(
+                SVGSurface.convert(bytestring=bytes(self.svg_content, encoding="utf-8"))
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+            print("Error: SVG content:")
+            print(self.svg_content)
+        else:
+            print("CairoSVG conversion successful")
 
     def save_svg(self, output_path: Union[str, Path]) -> None:
         """Save the SVG content to a file.
@@ -109,6 +120,8 @@ class RemoveOverlapsSVG:
         Args:
             output_path (Union[str, Path]): The path of the output file.
         """
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         logger.info(f"Saving {output_path}...")
         with open(output_path, "w") as output_file:
             output_file.write(self.svg_content)
@@ -119,6 +132,17 @@ class RemoveOverlapsSVG:
         Args:
             input_path (Union[str, Path]): The path of the input file.
         """
+        if not input_path:
+            raise ValueError("The input path cannot be empty.")
+
+        input_path = Path(input_path)
+
+        if not input_path.exists():
+            raise FileNotFoundError(f"The input path {input_path} does not exist.")
+
+        if not input_path.is_file():
+            raise NotADirectoryError(f"The input path {input_path} is not a file.")
+
         logger.info(f"Reading {input_path}...")
         with open(input_path, "r") as svg_file:
             self.svg_content = svg_file.read()
@@ -128,19 +152,30 @@ class RemoveOverlapsSVG:
     def _parse_svg(self):
         """Parse the SVG content and create an SVG object using picosvg."""
         logger.info("Parsing SVG...")
-        self.pico = picosvg.svg.SVG.fromstring(self.svg_content)
+        try:
+            self.pico = picosvg.svg.SVG.fromstring(self.svg_content)
+        except (picosvg.svg.SVGParseError, ValueError) as e:
+            logger.error(f"Failed to parse SVG: {e}")
+            raise
 
     def _picofy_svg(self):
         """Convert the SVG object to a picosvg representation if the 'picofy' option is enabled."""
         if self.picofy:
             logger.info("Picofying SVG...")
-            self.pico = self.pico.topicosvg()
-            self.svg_content = self.pico.tostring(pretty_print=False)
+            try:
+                self.pico = self.pico.topicosvg()
+                self.svg_content = self.pico.tostring(pretty_print=False)
+            except Exception as e:
+                logger.warn("Failed to picofy SVG: %s", e)
 
     def _prep_pico(self):
         """Prepare the picosvg object by parsing the SVG content and optionally converting it to a picosvg representation."""
-        self._parse_svg()
-        self._picofy_svg()
+        try:
+            self._parse_svg()
+            self._picofy_svg()
+        except Exception as e:
+            self._picosvg = None
+            self._picosvg_error = e
 
     def _filter_pico_shapes(self):
         """Filter the shapes in the picosvg object based on their fill values.
