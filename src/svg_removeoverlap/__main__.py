@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import logging
 from pathlib import Path
 from typing import Union
 
@@ -28,6 +29,16 @@ def remove_overlaps(
         picofy (bool, optional): If True, use picosvg to simplify input SVG. Defaults to True.
         verbose (bool, optional): If True, display detailed logging information. Defaults to False.
     """
+    if verbose:
+        logging.basicConfig(
+            level=logging.INFO, format="%(levelname)s: %(message)s"
+        )
+    else:
+        logging.basicConfig(
+            level=logging.WARNING, format="%(levelname)s: %(message)s"
+        )
+
+    # The verbose flag in RemoveOverlapsSVG is now primarily for tqdm visibility
     remover = RemoveOverlapsSVG(
         cairo=cairo, picofy=picofy, keep_white=keep_white, verbose=verbose
     )
