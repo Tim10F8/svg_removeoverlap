@@ -2,7 +2,7 @@ exclude: '^docs/conf.py'
 
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v4.4.0
+  rev: v4.6.0
   hooks:
   - id: trailing-whitespace
   - id: check-added-large-files
@@ -19,14 +19,14 @@ repos:
 
 ## If you want to automatically "modernize" your Python code:
 # - repo: https://github.com/asottile/pyupgrade
-#   rev: v3.3.1
+#   rev: v3.15.2 # Updated rev
 #   hooks:
 #   - id: pyupgrade
-#     args: ['--py37-plus']
+#     args: ['--py38-plus'] # Updated to py38-plus
 
 ## If you want to avoid flake8 errors due to unused vars or imports:
 # - repo: https://github.com/PyCQA/autoflake
-#   rev: v2.0.0
+#   rev: v2.3.1 # Updated rev
 #   hooks:
 #   - id: autoflake
 #     args: [
@@ -36,25 +36,26 @@ repos:
 #     ]
 
 - repo: https://github.com/PyCQA/isort
-  rev: 5.11.4
+  rev: 5.13.2
   hooks:
   - id: isort
+    args: ["--profile", "black"] # Ensure isort profile matches black
 
 - repo: https://github.com/psf/black
-  rev: stable
+  rev: 24.4.2
   hooks:
   - id: black
     language_version: python3
 
 ## If like to embrace black styles even in the docs:
 # - repo: https://github.com/asottile/blacken-docs
-#   rev: v1.13.0
+#   rev: v1.16.0 # Updated rev
 #   hooks:
 #   - id: blacken-docs
-#     additional_dependencies: [black]
+#     additional_dependencies: [black==24.4.2] # Match black version
 
 - repo: https://github.com/PyCQA/flake8
-  rev: 5.0.4
+  rev: 7.0.0
   hooks:
   - id: flake8
   ## You can add flake8 plugins via `additional_dependencies`:
@@ -62,6 +63,13 @@ repos:
 
 ## Check for misspells in documentation files:
 # - repo: https://github.com/codespell-project/codespell
-#   rev: v2.2.2
+#   rev: v2.2.6 # Updated rev
 #   hooks:
 #   - id: codespell
+
+- repo: https://github.com/pre-commit/mirrors-mypy
+  rev: v1.9.0 # Match mypy version if possible
+  hooks:
+  - id: mypy
+    args: [--no-strict-optional] # --ignore-missing-imports is in mypy.ini
+    # additional_dependencies: [lxml-stubs] # If needed
