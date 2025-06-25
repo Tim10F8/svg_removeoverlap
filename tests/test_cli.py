@@ -71,12 +71,38 @@ def test_cli_input_file_not_found(tmp_path):
     output_svg = tmp_path / "output.svg"
     result = run_cli([non_existent_input, str(output_svg)])
     assert result.returncode != 0 # Expect an error
-    # Fire usually prints the traceback to stderr
-    assert "FileNotFoundError" in result.stderr
+    # Error message is now custom due to new error handling in __main__
+    assert "Error: The input path does_not_exist.svg does not exist." in result.stderr or \
+           "Error: [Errno 2] No such file or directory: 'does_not_exist.svg'" in result.stderr # More generic OS error
 
-# TODO: Add CLI test for --sequential option
+def test_cli_sequential_option(tmp_path):
+    input_svg = FIXTURE_DIR / "simple_overlap.svg"
+    output_svg = tmp_path / "cli_output_sequential.svg"
+
+    result = run_cli([str(input_svg), str(output_svg), "--sequential"])
+    assert result.returncode == 0, f"CLI Error (sequential): {result.stderr}"
+    assert output_svg.exists()
+    assert output_svg.stat().st_size > 0
+    # Further checks could compare output with non-sequential, but exact output might vary
+    # For now, just ensure it runs and produces a valid SVG
+    try:
+        etree.parse(str(output_svg))
+    except etree.XMLSyntaxError as e:
+        pytest.fail(f"CLI Output SVG (sequential) is not well-formed XML: {e}")
+
+def test_cli_processing_error_malformed_svg(tmp_path):
+    input_svg = FIXTURE_DIR / "malformed.svg" # Use the new malformed fixture
+    output_svg = tmp_path / "cli_output_malformed_error.svg"
+
+    result = run_cli([str(input_svg), str(output_svg)])
+    assert result.returncode == 1, "CLI should exit with error code 1 for processing errors"
+    # Check for the user-friendly error message printed to stderr by __main__.py
+    assert "Error: Picosvg failed to parse SVG content" in result.stderr or \
+           "Error: Failed to construct path data from unioned shape" in result.stderr # Depending on where picosvg fails for this malformed SVG
+    assert not output_svg.exists(), "Output file should not be created on processing error"
+
 # TODO: Add CLI test for --cairo and --picofy if reliable way to test their effects via CLI
 #       (e.g. if they change output structure significantly or handle specific SVGs differently)
 # TODO: Add CLI tests for more complex error conditions if possible from CLI
 #       (e.g., providing a malformed SVG that causes SVGProcessingError)
-#       This would check if the error is reported reasonably on stderr.
+#       This would check if the error is reported reasonably on stderr. (Partially done above)

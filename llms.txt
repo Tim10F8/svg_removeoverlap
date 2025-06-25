@@ -60,9 +60,15 @@ src/
     __init__.py
     __main__.py
     remover.py
-  svg_removeoverlap.txt
 tests/
+  fixtures/
+    no_overlap.svg
+    simple_overlap.svg
+    with_white.svg
   conftest.py
+  test_cli.py
+  test_integration.py
+  test_remover.py
 .coveragerc
 .gitignore
 .isort.cfg
@@ -70,6 +76,7 @@ tests/
 .readthedocs.yml
 AUTHORS.md
 LICENSE.txt
+mypy.ini
 pyproject.toml
 README.md
 setup.cfg
@@ -115,7 +122,7 @@ jobs:
         with: {fetch-depth: 0}  # deep clone for setuptools-scm
       - uses: actions/setup-python@v4
         id: setup-python
-        with: {python-version: "3.11"}
+        with: {python-version: "3.11"}  # Use a recent Python for these steps
       - name: Run static analysis and format checkers
         run: pipx run pre-commit run --all-files --show-diff-on-failure
       - name: Build package distribution files
@@ -139,8 +146,11 @@ jobs:
     strategy:
       matrix:
         python:
-        - "3.7"  # oldest Python supported by PSF
-        - "3.11"  # newest Python that is stable
+        - "3.8"
+        - "3.9"
+        - "3.10"
+        - "3.11"
+        - "3.12"
         platform:
         - ubuntu-latest
         - macos-latest
@@ -187,7 +197,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
-        with: {python-version: "3.11"}
+        with: {python-version: "3.11"}  # Use a recent Python for publishing
       - name: Retrieve pre-built distribution files
         uses: actions/download-artifact@v3
         with: {name: python-distribution-files, path: dist/}
@@ -633,13 +643,7 @@ sphinx>=3.2.1
 </file>
 
 <file path="src/svg_removeoverlap/__init__.py">
-import sys
-
-if sys.version_info[:2] >= (3, 8):
-    # TODO: Import directly (no need for conditional) when `python_requires = >= 3.8`
-    from importlib.metadata import PackageNotFoundError, version  # pragma: no cover
-else:
-    from importlib_metadata import PackageNotFoundError, version  # pragma: no cover
+from importlib.metadata import PackageNotFoundError, version  # pragma: no cover
 
 try:
     # Change here if project is renamed and does not equal the package name
@@ -653,6 +657,7 @@ finally:
 
 <file path="src/svg_removeoverlap/__main__.py">
 #!/usr/bin/env python3
+import logging
 from pathlib import Path
 from typing import Union
 
@@ -682,6 +687,16 @@ def remove_overlaps(
         picofy (bool, optional): If True, use picosvg to simplify input SVG. Defaults to True.
         verbose (bool, optional): If True, display detailed logging information. Defaults to False.
     """
+    if verbose:
+        logging.basicConfig(
+            level=logging.INFO, format="%(levelname)s: %(message)s"
+        )
+    else:
+        logging.basicConfig(
+            level=logging.WARNING, format="%(levelname)s: %(message)s"
+        )
+
+    # The verbose flag in RemoveOverlapsSVG is now primarily for tqdm visibility
     remover = RemoveOverlapsSVG(
         cairo=cairo, picofy=picofy, keep_white=keep_white, verbose=verbose
     )
@@ -702,7 +717,7 @@ if __name__ == "__main__":
 import logging
 from pathlib import Path
 import sys
-from typing import List, Union
+from typing import List, Union, Optional
 
 import picosvg.svg
 import picosvg.svg_pathops
@@ -713,6 +728,10 @@ import tinycss2
 logger = logging.getLogger(__name__)
 
 from lxml import etree
+
+class SVGProcessingError(Exception):
+    """Custom exception for errors during SVG processing."""
+    pass
 
 def get_css_fill(style: str) -> str:
     """Extract the fill value from a CSS style string.
@@ -745,7 +764,7 @@ class RemoveOverlapsSVG:
         cairo: bool = True,
         picofy: bool = False,
         keep_white: bool = False,
-        skip_svg_fills: List[str] = None,
+        skip_svg_fills: Optional[List[str]] = None,
         verbose: bool = False,
     ) -> None:
         """Initialize RemoveOverlapsSVG class.
@@ -754,10 +773,10 @@ class RemoveOverlapsSVG:
             cairo (bool, optional): Use CairoSVG for SVG conversion. Defaults to True.
             picofy (bool, optional): Convert SVG to picosvg. Defaults to False.
             keep_white (bool, optional): Keep white fill shapes. Defaults to False.
-            skip_svg_fills (List[str], optional): List of fill values to skip. Defaults to a list of common white and transparent fill values.
+            skip_svg_fills (Optional[List[str]], optional): List of fill values to skip. Defaults to a list of common white and transparent fill values.
             verbose (bool, optional): Enable verbose logging. Defaults to False.
         """
-        self.skip_svg_fills: List[str] = skip_svg_fills or [
+        self.skip_svg_fills: List[str] = skip_svg_fills if skip_svg_fills is not None else [
             "white",
             "rgb(255,255,255)",
             "rgb(100%,100%,100%)",
@@ -771,11 +790,9 @@ class RemoveOverlapsSVG:
         self.cairo: bool = cairo
         self.picofy: bool = picofy
         self.keep_white: bool = keep_white
-        self.verbose: bool = verbose
-        if verbose:
-            logging.basicConfig(level=logging.INFO)
-        self.svg_content: str = None
-        self.pico: picosvg.svg.SVG = None
+        self.verbose: bool = verbose # Used for tqdm and potentially other conditional logic
+        self.svg_content: Optional[str] = None
+        self.pico: Optional[picosvg.svg.SVG] = None
 
     def _protect_clipPaths(self, svg_bytes: bytes) -> str:
         """Protect clipPaths by setting their fill to transparent.
@@ -789,7 +806,8 @@ class RemoveOverlapsSVG:
         try:
             root = etree.fromstring(svg_bytes)
         except (etree.XMLSyntaxError, etree.LxmlError) as err:
-            raise ValueError(f"Invalid SVG content: {err}") from err
+            logger.error(f"XML parsing error in _protect_clipPaths: {err}")
+            raise SVGProcessingError(f"Invalid XML structure in SVG for clipPath processing: {err}") from err
         clip_paths = root.findall(".//{http://www.w3.org/2000/svg}clipPath")
         for clip_path in clip_paths:
             paths = clip_path.findall("{http://www.w3.org/2000/svg}path")
@@ -801,18 +819,23 @@ class RemoveOverlapsSVG:
 
     def _prep_svg_cairo(self) -> None:
         """Prepare the SVG content for CairoSVG conversion."""
+        if self.svg_content is None:
+            # This case should ideally not be reached if load_svg was called.
+            raise SVGProcessingError("SVG content not loaded before Cairo preprocessing.")
         from cairosvg.surface import SVGSurface
 
         try:
-            self.svg_content = self._protect_clipPaths(
-                SVGSurface.convert(bytestring=bytes(self.svg_content, encoding="utf-8"))
-            )
+            converted_svg_bytes = SVGSurface.convert(bytestring=bytes(self.svg_content, encoding="utf-8"))
+            self.svg_content = self._protect_clipPaths(converted_svg_bytes)
+            logger.info("CairoSVG conversion successful.")
+        except ValueError as ve:
+            logger.error(f"CairoSVG ValueError during conversion: {ve}")
+            raise SVGProcessingError(f"CairoSVG failed to convert SVG due to invalid input or structure: {ve}") from ve
         except Exception as e:
-            print(f"Error: {e}")
-            print("Error: SVG content:")
-            print(self.svg_content)
-        else:
-            print("CairoSVG conversion successful")
+            logger.error(f"Unexpected error during CairoSVG conversion: {e}")
+            # Consider logging self.svg_content or part of it if small, for debugging, but be careful with large files.
+            # For now, just raise the more generic error.
+            raise SVGProcessingError(f"An unexpected error occurred with CairoSVG processing: {e}") from e
 
     def save_svg(self, output_path: Union[str, Path]) -> None:
         """Save the SVG content to a file.
@@ -852,30 +875,40 @@ class RemoveOverlapsSVG:
     def _parse_svg(self):
         """Parse the SVG content and create an SVG object using picosvg."""
         logger.info("Parsing SVG...")
+        if self.svg_content is None:
+            raise SVGProcessingError("SVG content not loaded before parsing.")
         try:
             self.pico = picosvg.svg.SVG.fromstring(self.svg_content)
-        except (picosvg.svg.SVGParseError, ValueError) as e:
-            logger.error(f"Failed to parse SVG: {e}")
-            raise
+        except picosvg.svg.SVGParseError as spe:
+            logger.error(f"Picosvg failed to parse SVG: {spe}")
+            raise SVGProcessingError(f"Picosvg failed to parse SVG content: {spe}") from spe
+        except ValueError as ve: # picosvg might also raise ValueError for certain issues
+            logger.error(f"Picosvg encountered a ValueError during parsing: {ve}")
+            raise SVGProcessingError(f"Picosvg encountered a ValueError parsing SVG content: {ve}") from ve
+        except Exception as e: # Catch any other unexpected errors from picosvg
+            logger.error(f"Unexpected error during picosvg parsing: {e}")
+            raise SVGProcessingError(f"An unexpected error occurred during picosvg parsing: {e}") from e
 
     def _picofy_svg(self):
         """Convert the SVG object to a picosvg representation if the 'picofy' option is enabled."""
         if self.picofy:
+            if self.pico is None:
+                raise SVGProcessingError("PicoSVG object not available for picofying.")
             logger.info("Picofying SVG...")
             try:
-                self.pico = self.pico.topicosvg()
+                self.pico = self.pico.topicosvg() # This re-assigns self.pico
+                if self.pico is None: # Should not happen if topicosvg() is well-behaved
+                    raise SVGProcessingError("PicoSVG object became None after topicosvg().")
                 self.svg_content = self.pico.tostring(pretty_print=False)
             except Exception as e:
-                logger.warn("Failed to picofy SVG: %s", e)
+                logger.warning(f"Failed to picofy SVG: {e}")
+                raise SVGProcessingError(f"Failed during picosvg simplification (topicosvg): {e}") from e
 
     def _prep_pico(self):
         """Prepare the picosvg object by parsing the SVG content and optionally converting it to a picosvg representation."""
-        try:
-            self._parse_svg()
-            self._picofy_svg()
-        except Exception as e:
-            self._picosvg = None
-            self._picosvg_error = e
+        # Exceptions from _parse_svg and _picofy_svg are now specific and will propagate.
+        self._parse_svg()
+        self._picofy_svg()
 
     def _filter_pico_shapes(self):
         """Filter the shapes in the picosvg object based on their fill values.
@@ -883,6 +916,9 @@ class RemoveOverlapsSVG:
         Returns:
             List[picosvg.svg.Shapes]: A list of filtered shapes.
         """
+        if self.pico is None:
+            raise SVGProcessingError("PicoSVG object not available for filtering shapes.")
+
         shapes = []
         for shape in tqdm(
             self.pico.shapes(),
@@ -918,17 +954,35 @@ class RemoveOverlapsSVG:
                 )
         else:
             logger.info("Removing overlaps...")
-            new_shape = picosvg.svg_pathops.union(shapes, clip_rules)
-        union_d = picosvg.svg.SVGPath.from_commands(new_shape).d
+            try:
+                new_shape = picosvg.svg_pathops.union(shapes, clip_rules)
+            except Exception as e:
+                logger.error(f"Error during picosvg.svg_pathops.union: {e}")
+                raise SVGProcessingError(f"Failed to compute union of shapes: {e}") from e
+        try:
+            union_d = picosvg.svg.SVGPath.from_commands(new_shape).d
+        except Exception as e:
+            logger.error(f"Error converting new shape to path 'd' attribute: {e}")
+            raise SVGProcessingError(f"Failed to construct path data from unioned shape: {e}") from e
+
+        if self.pico is None or self.pico.svg_root is None:
+            raise SVGProcessingError("PicoSVG object or its root not available for rebuilding SVG after overlap removal.")
+
         new_root = etree.Element("svg")
-        for a, v in self.pico.svg_root.attrib.items():
+        for a, v in self.pico.svg_root.attrib.items(): # type: ignore # MyPy might not know svg_root type if pico is from mock
             new_root.set(a, v)
         new_root.set("xmlns", "http://www.w3.org/2000/svg")
-        new_svg = picosvg.svg.SVG(new_root)
-        new_svg.view_box = self.pico.view_box
+
+        new_svg_obj = picosvg.svg.SVG(new_root)
+        if self.pico.view_box is not None:
+            new_svg_obj.view_box = self.pico.view_box
+
         path_el = etree.SubElement(new_root, "path")
         path_el.set("d", union_d)
-        self.pico = new_svg
+
+        self.pico = new_svg_obj # self.pico is now the new SVG structure
+        if self.pico is None: # Should not happen
+             raise SVGProcessingError("SVG object became None unexpectedly after rebuilding.")
         self.svg_content = self.pico.tostring(pretty_print=True)
 
     def remove(self, sequential: bool = False) -> None:
@@ -940,388 +994,25 @@ class RemoveOverlapsSVG:
         self.remove_overlaps_pico(sequential=sequential)
 </file>
 
-<file path="src/svg_removeoverlap.txt">
-=== file: __init__.py ===
+<file path="tests/fixtures/no_overlap.svg">
+<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
+    <rect x="10" y="10" width="30" height="30" fill="green"/>
+    <rect x="50" y="50" width="30" height="30" fill="yellow"/>
+</svg>
+</file>
 
-```
- import sys
+<file path="tests/fixtures/simple_overlap.svg">
+<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
+    <rect x="10" y="10" width="50" height="50" fill="red"/>
+    <rect x="40" y="40" width="50" height="50" fill="blue"/>
+</svg>
+</file>
 
- if sys.version_info[:2] >= (3, 8):
-     # TODO: Import directly (no need for conditional) when `python_requires = >= 3.8`
-     from importlib.metadata import PackageNotFoundError, version  # pragma: no cover
- else:
-     from importlib_metadata import PackageNotFoundError, version  # pragma: no cover
-
- try:
-     # Change here if project is renamed and does not equal the package name
-     dist_name = __name__
-     __version__ = version(dist_name)
- except PackageNotFoundError:  # pragma: no cover
-     __version__ = "unknown"
- finally:
-     del version, PackageNotFoundError
-
-```
-
-=== file: __main__.py ===
-
-```
- #!/usr/bin/env python3
- import fire
- from .remover import RemoveOverlapsSVG
-
- def remove_overlaps(
-     input_svg,
-     output_svg,
-     sequential=False,
-     keep_white=False,
-     cairo=True,
-     picofy=False,
-     verbose=False,
- ):
-     remover = RemoveOverlapsSVG(
-         cairo=cairo, picofy=picofy, keep_white=keep_white, verbose=verbose
-     )
-     remover.load_svg(Path(input_svg))
-     remover.remove(sequential=sequential)
-     remover.save_svg(Path(output_svg))
-
- if __name__ == "__main__":
-     fire.core.Display = lambda lines, out: print(*lines, file=out)
-     fire.Fire(remove_overlaps)
-
-```
-
-=== file: remover.py ===
-
-```
- #!/usr/bin/env python3
- import logging
- from pathlib import Path
- import sys
- from typing import List, Union
-
- import picosvg.svg
- import picosvg.svg_pathops
- from lxml import etree
- from tqdm import tqdm
- import tinycss2
-
-
- logger = logging.getLogger(__name__)
-
- from lxml import etree
-
-
- def get_css_fill(style):
-     return (
-         next(
-             (
-                 token.value[0].serialize()
-                 for token in tinycss2.parse_declaration_list(style)
-                 if hasattr(token, "name") and token.name == "fill"
-             ),
-             "",
-         )
-         .replace(" ", "")
-         .lower()
-     )
-
-
- class RemoveOverlapsSVG:
-     def __init__(
-         self,
-         cairo: bool = True,
-         picofy: bool = False,
-         keep_white: bool = False,
-         skip_svg_fills: List[str] = None,
-         verbose: bool = False,
-     ) -> None:
-         self.skip_svg_fills: List[str] = skip_svg_fills or [
-             "white",
-             "rgb(255,255,255)",
-             "rgb(100%,100%,100%)",
-             "rgba(255,255,255,1)",
-             "hsl(0,0%,100%)",
-             "hsla(0,0%,100%,1)",
-             "transparent",
-             "rgba(0,0,0,0)",
-             "hsla(0,0%,0%,0)",
-             "#ffffff",
-             "none",
-         ]
-         self.cairo: bool = cairo
-         self.picofy: bool = picofy
-         self.keep_white: bool = keep_white
-         self.verbose: bool = verbose
-         if verbose:
-             logging.basicConfig(level=logging.INFO)
-         self.svg_content: str = None
-         self.pico: picosvg.svg.SVG = None
-
-     def _protect_clipPaths(self, svg_bytes):
-         root = etree.fromstring(svg_bytes)
-         clip_paths = root.findall(".//{http://www.w3.org/2000/svg}clipPath")
-         for clip_path in clip_paths:
-             paths = clip_path.findall("{http://www.w3.org/2000/svg}path")
-             for path in paths:
-                 path.set("fill", "transparent")
-         return etree.tostring(root, encoding="UTF-8", xml_declaration=True).decode(
-             "utf-8"
-         )
-
-     def _prep_svg_cairo(self) -> str:
-         from cairosvg.surface import SVGSurface
-
-         self.svg_content = self._protect_clipPaths(
-             SVGSurface.convert(bytestring=bytes(self.svg_content, encoding="utf-8"))
-         )
-
-     def save_svg(self, output_path: Union[str, Path]) -> None:
-         logger.info(f"Saving {output_path}...")
-         with open(output_path, "w") as output_file:
-             output_file.write(self.svg_content)
-
-     def load_svg(self, input_path: Union[str, Path]) -> None:
-         logger.info(f"Reading {input_path}...")
-         with open(input_path, "r") as svg_file:
-             self.svg_content = svg_file.read()
-         if self.cairo:
-             self._prep_svg_cairo()
-
-     def _parse_svg(self):
-         logger.info("Parsing SVG...")
-         self.pico = picosvg.svg.SVG.fromstring(self.svg_content)
-
-     def _picofy_svg(self):
-         if self.picofy:
-             logger.info("Picofying SVG...")
-             self.pico = self.pico.topicosvg()
-             self.svg_content = self.pico.tostring(pretty_print=False)
-
-     def _prep_pico(self):
-         self._parse_svg()
-         self._picofy_svg()
-
-     def _filter_pico_shapes(self):
-         shapes = []
-         for shape in tqdm(
-             self.pico.shapes(),
-             desc="Converting paths",
-             disable=not self.verbose or not sys.stdout.isatty(),
-         ):
-             fill = get_css_fill(shape.style) or shape.fill.replace(" ", "").lower()
-             if (self.keep_white) or (fill not in self.skip_svg_fills):
-                 shapes.append(shape)
-         return shapes
-
-     def remove_overlaps_pico(
-         self,
-         sequential: bool = False,
-     ) -> None:
-         self._prep_pico()
-         shapes = self._filter_pico_shapes()
-         clip_rule = "nonzero"
-         clip_rules = [clip_rule] * len(shapes)
-
-         if sequential:
-             new_shape = shapes[0]
-             for shape in tqdm(
-                 shapes[1:],
-                 desc="Removing overlaps",
-                 disable=not self.verbose or not sys.stdout.isatty(),
-             ):
-                 new_shape = picosvg.svg_pathops.union(
-                     [new_shape, shape], [clip_rule, clip_rule]
-                 )
-         else:
-             logger.info("Removing overlaps...")
-             new_shape = picosvg.svg_pathops.union(shapes, clip_rules)
-         union_d = picosvg.svg.SVGPath.from_commands(new_shape).d
-         new_root = etree.Element("svg")
-         for a, v in self.pico.svg_root.attrib.items():
-             new_root.set(a, v)
-         new_root.set("xmlns", "http://www.w3.org/2000/svg")
-         new_svg = picosvg.svg.SVG(new_root)
-         new_svg.view_box = self.pico.view_box
-         path_el = etree.SubElement(new_root, "path")
-         path_el.set("d", union_d)
-         self.pico = new_svg
-         self.svg_content = self.pico.tostring(pretty_print=True)
-
-     def remove(
-         self,
-         sequential: bool = False,
-     ) -> None:
-         self.remove_overlaps_pico(sequential=sequential)
-
-
-```
-
- #!/usr/bin/env python3
- import logging
- from pathlib import Path
- import sys
- from typing import List, Union
-
- import picosvg.svg
- import picosvg.svg_pathops
- from lxml import etree
- from tqdm import tqdm
- import tinycss2
-
-
- logger = logging.getLogger(__name__)
-
- from lxml import etree
-
-
- def get_css_fill(style):
-     return (
-         next(
-             (
-                 token.value[0].serialize()
-                 for token in tinycss2.parse_declaration_list(style)
-                 if hasattr(token, "name") and token.name == "fill"
-             ),
-             "",
-         )
-         .replace(" ", "")
-         .lower()
-     )
-
-
- class RemoveOverlapsSVG:
-     def __init__(
-         self,
-         cairo: bool = True,
-         picofy: bool = False,
-         keep_white: bool = False,
-         skip_svg_fills: List[str] = None,
-         verbose: bool = False,
-     ) -> None:
-         self.skip_svg_fills: List[str] = skip_svg_fills or [
-             "white",
-             "rgb(255,255,255)",
-             "rgb(100%,100%,100%)",
-             "rgba(255,255,255,1)",
-             "hsl(0,0%,100%)",
-             "hsla(0,0%,100%,1)",
-             "transparent",
-             "rgba(0,0,0,0)",
-             "hsla(0,0%,0%,0)",
-             "#ffffff",
-             "none",
-         ]
-         self.cairo: bool = cairo
-         self.picofy: bool = picofy
-         self.keep_white: bool = keep_white
-         self.verbose: bool = verbose
-         if verbose:
-             logging.basicConfig(level=logging.INFO)
-         self.svg_content: str = None
-         self.pico: picosvg.svg.SVG = None
-
-     def _protect_clipPaths(self, svg_bytes):
-         root = etree.fromstring(svg_bytes)
-         clip_paths = root.findall(".//{http://www.w3.org/2000/svg}clipPath")
-         for clip_path in clip_paths:
-             paths = clip_path.findall("{http://www.w3.org/2000/svg}path")
-             for path in paths:
-                 path.set("fill", "transparent")
-         return etree.tostring(root, encoding="UTF-8", xml_declaration=True).decode(
-             "utf-8"
-         )
-
-     def _prep_svg_cairo(self) -> str:
-         from cairosvg.surface import SVGSurface
-
-         self.svg_content = self._protect_clipPaths(
-             SVGSurface.convert(bytestring=bytes(self.svg_content, encoding="utf-8"))
-         )
-
-     def save_svg(self, output_path: Union[str, Path]) -> None:
-         logger.info(f"Saving {output_path}...")
-         with open(output_path, "w") as output_file:
-             output_file.write(self.svg_content)
-
-     def load_svg(self, input_path: Union[str, Path]) -> None:
-         logger.info(f"Reading {input_path}...")
-         with open(input_path, "r") as svg_file:
-             self.svg_content = svg_file.read()
-         if self.cairo:
-             self._prep_svg_cairo()
-
-     def _parse_svg(self):
-         logger.info("Parsing SVG...")
-         self.pico = picosvg.svg.SVG.fromstring(self.svg_content)
-
-     def _picofy_svg(self):
-         if self.picofy:
-             logger.info("Picofying SVG...")
-             self.pico = self.pico.topicosvg()
-             self.svg_content = self.pico.tostring(pretty_print=False)
-
-     def _prep_pico(self):
-         self._parse_svg()
-         self._picofy_svg()
-
-     def _filter_pico_shapes(self):
-         shapes = []
-         for shape in tqdm(
-             self.pico.shapes(),
-             desc="Converting paths",
-             disable=not self.verbose or not sys.stdout.isatty(),
-         ):
-             fill = get_css_fill(shape.style) or shape.fill.replace(" ", "").lower()
-             if (self.keep_white) or (fill not in self.skip_svg_fills):
-                 shapes.append(shape)
-         return shapes
-
-     def remove_overlaps_pico(
-         self,
-         sequential: bool = False,
-     ) -> None:
-         self._prep_pico()
-         shapes = self._filter_pico_shapes()
-         clip_rule = "nonzero"
-         clip_rules = [clip_rule] * len(shapes)
-
-         if sequential:
-             new_shape = shapes[0]
-             for shape in tqdm(
-                 shapes[1:],
-                 desc="Removing overlaps",
-                 disable=not self.verbose or not sys.stdout.isatty(),
-             ):
-                 new_shape = picosvg.svg_pathops.union(
-                     [new_shape, shape], [clip_rule, clip_rule]
-                 )
-         else:
-             logger.info("Removing overlaps...")
-             new_shape = picosvg.svg_pathops.union(shapes, clip_rules)
-         union_d = picosvg.svg.SVGPath.from_commands(new_shape).d
-         new_root = etree.Element("svg")
-         for a, v in self.pico.svg_root.attrib.items():
-             new_root.set(a, v)
-         new_root.set("xmlns", "http://www.w3.org/2000/svg")
-         new_svg = picosvg.svg.SVG(new_root)
-         new_svg.view_box = self.pico.view_box
-         path_el = etree.SubElement(new_root, "path")
-         path_el.set("d", union_d)
-         self.pico = new_svg
-         self.svg_content = self.pico.tostring(pretty_print=True)
-
-     def remove(
-         self,
-         sequential: bool = False,
-     ) -> None:
-         self.remove_overlaps_pico(sequential=sequential)
-
-
-```
-
-===
+<file path="tests/fixtures/with_white.svg">
+<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
+    <rect x="10" y="10" width="50" height="50" fill="black"/>
+    <rect x="40" y="40" width="50" height="50" fill="white"/>
+</svg>
 </file>
 
 <file path="tests/conftest.py">
@@ -1335,6 +1026,475 @@ class RemoveOverlapsSVG:
 """
 
 # import pytest
+</file>
+
+<file path="tests/test_cli.py">
+import pytest
+from pathlib import Path
+import subprocess
+from lxml import etree # For parsing output XML
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures"
+MAIN_SCRIPT = ["svg_removeoverlap"] # Assuming it's installed and in PATH or using entry point
+
+def run_cli(args):
+    """Helper function to run the CLI command and return result."""
+    return subprocess.run(MAIN_SCRIPT + args, capture_output=True, text=True)
+
+def test_cli_help():
+    result = run_cli(["--help"])
+    assert result.returncode == 0
+    assert "svg_removeoverlap" in result.stdout
+    assert "INPUT_SVG" in result.stdout
+    assert "OUTPUT_SVG" in result.stdout
+
+def test_cli_basic_processing(tmp_path):
+    input_svg = FIXTURE_DIR / "simple_overlap.svg"
+    output_svg = tmp_path / "cli_output.svg"
+
+    result = run_cli([str(input_svg), str(output_svg)])
+
+    assert result.returncode == 0, f"CLI Error: {result.stderr}"
+    assert output_svg.exists()
+    assert output_svg.stat().st_size > 0
+
+    try:
+        output_tree = etree.parse(str(output_svg))
+        output_root = output_tree.getroot()
+        assert output_root.tag == "{http://www.w3.org/2000/svg}svg"
+    except etree.XMLSyntaxError as e:
+        pytest.fail(f"CLI Output SVG is not well-formed XML: {e}\nContent:\n{output_svg.read_text()}")
+
+def test_cli_keep_white(tmp_path):
+    input_svg = FIXTURE_DIR / "with_white.svg"
+    output_svg = tmp_path / "cli_output_white.svg"
+
+    # Test without keep_white (default: white removed)
+    result_no_keep = run_cli([str(input_svg), str(output_svg)])
+    assert result_no_keep.returncode == 0, f"CLI Error (no keep_white): {result_no_keep.stderr}"
+    assert output_svg.exists()
+    content_no_keep = output_svg.read_text().lower()
+    assert 'fill="white"' not in content_no_keep and 'fill="#ffffff"' not in content_no_keep
+
+    # Test with keep_white
+    output_svg_kept = tmp_path / "cli_output_white_kept.svg"
+    result_keep = run_cli([str(input_svg), str(output_svg_kept), "--keep_white"]) # or -k
+    assert result_keep.returncode == 0, f"CLI Error (keep_white): {result_keep.stderr}"
+    assert output_svg_kept.exists()
+    content_kept = output_svg_kept.read_text().lower()
+    assert 'fill="white"' in content_kept or 'fill="#ffffff"' in content_kept
+
+def test_cli_verbose_option(tmp_path):
+    input_svg = FIXTURE_DIR / "no_overlap.svg"
+    output_svg = tmp_path / "cli_output_verbose.svg"
+
+    result = run_cli([str(input_svg), str(output_svg), "--verbose"]) # or -v
+    assert result.returncode == 0, f"CLI Error: {result.stderr}"
+    assert output_svg.exists()
+    # Verbose should produce INFO level logs, which go to stdout for Fire by default
+    # if logging is configured as in __main__.py to print to console.
+    # The default fire.core.Display prints to stdout.
+    # Our __main__ configures logging to print to console.
+    assert "INFO: Reading" in result.stdout or "INFO: Saving" in result.stdout # Check for logger output
+
+def test_cli_input_file_not_found(tmp_path):
+    non_existent_input = "does_not_exist.svg"
+    output_svg = tmp_path / "output.svg"
+    result = run_cli([non_existent_input, str(output_svg)])
+    assert result.returncode != 0 # Expect an error
+    # Fire usually prints the traceback to stderr
+    assert "FileNotFoundError" in result.stderr
+
+# TODO: Add CLI test for --sequential option
+# TODO: Add CLI test for --cairo and --picofy if reliable way to test their effects via CLI
+#       (e.g. if they change output structure significantly or handle specific SVGs differently)
+# TODO: Add CLI tests for more complex error conditions if possible from CLI
+#       (e.g., providing a malformed SVG that causes SVGProcessingError)
+#       This would check if the error is reported reasonably on stderr.
+</file>
+
+<file path="tests/test_integration.py">
+import pytest
+from pathlib import Path
+from lxml import etree # For parsing output XML
+
+from svg_removeoverlap.remover import RemoveOverlapsSVG
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures"
+
+@pytest.mark.parametrize(
+    "input_svg_name, keep_white_setting, cairo_setting, picofy_setting",
+    [
+        ("simple_overlap.svg", False, False, False),
+        ("no_overlap.svg", False, False, False),
+        ("with_white.svg", False, False, False), # white should be removed
+        ("with_white.svg", True, False, False),  # white should be kept
+        # TODO: Could add cases for cairo=True if cairo is reliably available in test env
+        # ("simple_overlap.svg", False, True, False),
+    ]
+)
+def test_svg_processing_integration(tmp_path, input_svg_name, keep_white_setting, cairo_setting, picofy_setting):
+    input_svg_path = FIXTURE_DIR / input_svg_name
+    output_svg_path = tmp_path / f"output_{input_svg_name}"
+
+    remover = RemoveOverlapsSVG(
+        cairo=cairo_setting,
+        picofy=picofy_setting,
+        keep_white=keep_white_setting,
+        verbose=True # Enable verbose for more log output during tests if needed
+    )
+
+    remover.load_svg(input_svg_path)
+    # The remove() method calls remove_overlaps_pico() internally
+    remover.remove(sequential=False) # Test with non-sequential for now
+    remover.save_svg(output_svg_path)
+
+    assert output_svg_path.exists()
+    assert output_svg_path.stat().st_size > 0 # Check file is not empty
+
+    # Try to parse the output SVG to ensure it's valid XML and has an <svg> root
+    try:
+        output_tree = etree.parse(str(output_svg_path))
+        output_root = output_tree.getroot()
+        assert output_root.tag == "{http://www.w3.org/2000/svg}svg", "Output is not a valid SVG file"
+    except etree.XMLSyntaxError as e:
+        pytest.fail(f"Output SVG file is not well-formed XML: {e}\nContent:\n{output_svg_path.read_text()}")
+
+    # Specific assertions based on input and settings
+    # These are examples and might need refinement
+    output_content = output_svg_path.read_text().lower()
+    if input_svg_name == "simple_overlap.svg":
+        # After union, there should ideally be a single path if all shapes are combined.
+        # This depends heavily on picosvg's output.
+        # A simpler check might be that "red" and "blue" fills are gone if not preserved by some logic.
+        # For now, we mainly check it produces a valid SVG.
+        pass
+    elif input_svg_name == "with_white.svg":
+        if keep_white_setting:
+            assert 'fill="white"' in output_content or 'fill="#ffffff"' in output_content # Check white is present
+        else:
+            assert 'fill="white"' not in output_content and 'fill="#ffffff"' not in output_content # Check white is absent
+
+    # More specific assertions could be:
+    # - Counting number of <path> elements (e.g., expect 1 after union of overlapping shapes)
+    # - Checking for the absence/presence of certain fill colors in the final output.
+    # - Verifying viewbox consistency.
+    # These would require more knowledge of the expected output from picosvg.
+
+# TODO: Add integration test for sequential=True mode.
+# TODO: Add integration tests for error conditions (e.g., malformed input SVG that passes initial load but fails in picosvg).
+#       This might require creating specific malformed SVG fixture files.
+#       Example: an SVG that is XML-valid but has problematic path data for picosvg.
+# remover.remove(sequential=True)
+# assert ...
+</file>
+
+<file path="tests/test_remover.py">
+from unittest import mock
+import pytest
+
+from svg_removeoverlap.remover import get_css_fill, SVGProcessingError, RemoveOverlapsSVG
+from pathlib import Path
+
+
+# Tests for get_css_fill
+@pytest.mark.parametrize(
+    "style_str, expected_fill",
+    [
+        ("fill:#ff0000;", "#ff0000"),
+        ("fill: red; stroke: blue;", "red"),
+        ("font-size: 12px; fill:rgb(0,255,0);", "rgb(0,255,0)"),
+        ("fill: hsl(120, 100%, 50%);", "hsl(120,100%,50%)"), # Test case with space in hsl
+        ("fill:none;", "none"),
+        ("stroke: black;", ""), # No fill
+        ("", ""), # Empty string
+        ("fill: ;", ""), # Fill with no value
+        ("fill: red; fill: blue;", "red"), # First one wins as per current implementation logic
+        ("fill:#FF0000;", "#ff0000"), # Case insensitivity for hex
+        ("fill: RGB(0,255,0);", "rgb(0,255,0)"), # Case insensitivity for rgb
+        ("fill: HSL(120,100%,50%);", "hsl(120,100%,50%)"), # Case insensitivity for hsl
+        # Malformed but tinycss2 might recover or ignore
+        ("fill: red stroke: blue", "red"), # Missing semicolon
+        ("fill : yellow", "yellow"), # Space around colon
+    ],
+)
+def test_get_css_fill(style_str, expected_fill):
+    assert get_css_fill(style_str) == expected_fill
+
+# Placeholder for tests for RemoveOverlapsSVG class
+class TestRemoveOverlapsSVG:
+    def test_dummy(self): # Dummy test to make sure the class can be instantiated
+        remover = RemoveOverlapsSVG(cairo=False) # Disable cairo for basic instantiation test
+        assert remover is not None
+
+    @pytest.fixture
+    def remover_no_cairo(self):
+        return RemoveOverlapsSVG(cairo=False, picofy=False)
+
+    def test_load_svg_empty_path(self, remover_no_cairo):
+        with pytest.raises(ValueError, match="The input path cannot be empty."):
+            remover_no_cairo.load_svg(None)
+        with pytest.raises(ValueError, match="The input path cannot be empty."):
+            remover_no_cairo.load_svg("")
+
+    def test_load_svg_file_not_found(self, remover_no_cairo):
+        with pytest.raises(FileNotFoundError, match="The input path non_existent_file.svg does not exist."):
+            remover_no_cairo.load_svg(Path("non_existent_file.svg"))
+
+    @mock.patch("pathlib.Path.is_file", return_value=False)
+    @mock.patch("pathlib.Path.exists", return_value=True)
+    def test_load_svg_path_is_not_a_file(self, mock_exists, mock_is_file, remover_no_cairo):
+        with pytest.raises(NotADirectoryError, match="The input path path_is_a_dir is not a file."): # Corrected error type
+            remover_no_cairo.load_svg(Path("path_is_a_dir"))
+
+    @mock.patch("builtins.open", new_callable=mock.mock_open, read_data="<svg></svg>")
+    @mock.patch("pathlib.Path.is_file", return_value=True)
+    @mock.patch("pathlib.Path.exists", return_value=True)
+    def test_load_svg_successful(self, mock_exists, mock_is_file, mock_file_open, remover_no_cairo):
+        remover_no_cairo.load_svg(Path("dummy.svg"))
+        assert remover_no_cairo.svg_content == "<svg></svg>"
+        mock_file_open.assert_called_once_with(Path("dummy.svg"), "r")
+
+    # Basic test for _protect_clipPaths - more detailed tests would require actual SVG content
+    def test_protect_clip_paths_simple(self, remover_no_cairo):
+        svg_bytes = b'<svg><clipPath id="cp1"><path d="M0,0 L10,0 L10,10 L0,10Z" fill="red"/></clipPath></svg>'
+        protected_svg_str = remover_no_cairo._protect_clipPaths(svg_bytes)
+        assert 'fill="transparent"' in protected_svg_str
+        assert 'fill="red"' not in protected_svg_str # Ensure original fill is replaced
+
+    def test_protect_clip_paths_malformed_xml(self, remover_no_cairo):
+        svg_bytes = b'<svg><clipPath id="cp1"><path d="M0,0 L10,0 L10,10 L0,10Z" fill="red"</clipPath></svg>' # Missing quote in fill
+        with pytest.raises(SVGProcessingError, match="Invalid XML structure in SVG for clipPath processing"):
+            remover_no_cairo._protect_clipPaths(svg_bytes)
+
+    # Placeholder for _prep_svg_cairo tests (requires mocking CairoSVG)
+    @mock.patch("svg_removeoverlap.remover.SVGSurface")
+    def test_prep_svg_cairo_called_if_enabled(self, mock_svg_surface_class, tmp_path):
+        # Mock SVGSurface.convert to avoid actual CairoSVG dependency and complex return
+        mock_svg_surface_class.convert.return_value = b"<svg_cairo_output></svg_cairo_output>"
+
+        remover_with_cairo = RemoveOverlapsSVG(cairo=True)
+        # Need to set svg_content before _prep_svg_cairo is called internally by load_svg
+        remover_with_cairo.svg_content = "<svg_initial></svg_initial>"
+
+        # Create a dummy file to load
+        dummy_svg_path = tmp_path / "dummy_cairo.svg"
+        dummy_svg_path.write_text("<svg_initial></svg_initial>")
+
+        remover_with_cairo.load_svg(dummy_svg_path) # This will call _prep_svg_cairo
+
+        mock_svg_surface_class.convert.assert_called_once()
+        # Check that svg_content was modified by the mocked _protect_clipPaths (called by _prep_svg_cairo)
+        # This is an indirect check that _prep_svg_cairo's flow was entered
+        assert remover_with_cairo.svg_content != "<svg_initial></svg_initial>"
+        assert "<svg_cairo_output>" in remover_with_cairo.svg_content # More direct check after _protect_clipPaths
+
+    @mock.patch("svg_removeoverlap.remover.SVGSurface")
+    def test_prep_svg_cairo_handles_conversion_error(self, mock_svg_surface_class):
+        mock_svg_surface_class.convert.side_effect = ValueError("Cairo conversion failed")
+
+        remover = RemoveOverlapsSVG(cairo=True)
+        remover.svg_content = "<svg></svg>" # Set content to trigger conversion
+        with pytest.raises(SVGProcessingError, match="CairoSVG failed to convert SVG"):
+            remover._prep_svg_cairo() # Call directly for this test
+
+    # More tests will be added here for:
+    # - _parse_svg, _picofy_svg, _prep_pico (mocking picosvg)
+    @mock.patch("svg_removeoverlap.remover.picosvg.svg.SVG")
+    def test_parse_svg_successful(self, mock_picosvg_svg_class, remover_no_cairo):
+        mock_svg_instance = mock.MagicMock()
+        mock_picosvg_svg_class.fromstring.return_value = mock_svg_instance
+        remover_no_cairo.svg_content = "<svg></svg>"
+
+        remover_no_cairo._parse_svg()
+
+        mock_picosvg_svg_class.fromstring.assert_called_once_with("<svg></svg>")
+        assert remover_no_cairo.pico == mock_svg_instance
+
+    @mock.patch("svg_removeoverlap.remover.picosvg.svg.SVG")
+    def test_parse_svg_handles_parse_error(self, mock_picosvg_svg_class, remover_no_cairo):
+        # Need to import picosvg.svg directly here to reference SVGParseError for the side_effect
+        from picosvg.svg import SVGParseError
+        mock_picosvg_svg_class.fromstring.side_effect = SVGParseError("Picosvg parsing failed")
+        remover_no_cairo.svg_content = "<svg_malformed></svg_malformed>"
+
+        with pytest.raises(SVGProcessingError, match="Picosvg failed to parse SVG content"):
+            remover_no_cairo._parse_svg()
+
+    @mock.patch("svg_removeoverlap.remover.picosvg.svg.SVG") # Mock the class used by _parse_svg
+    def test_picofy_svg_when_enabled(self, mock_picosvg_svg_class_for_parse, remover_no_cairo):
+        # Setup for _parse_svg to run without error
+        mock_parsed_svg_instance = mock.MagicMock()
+        mock_picofied_svg_instance = mock.MagicMock()
+        mock_parsed_svg_instance.topicosvg.return_value = mock_picofied_svg_instance
+        mock_picofied_svg_instance.tostring.return_value = "<picofied_svg/>"
+        mock_picosvg_svg_class_for_parse.fromstring.return_value = mock_parsed_svg_instance
+
+        remover_no_cairo.svg_content = "<svg_content_for_picofy>"
+        remover_no_cairo.picofy = True # Enable picofy
+
+        remover_no_cairo._prep_pico() # This calls _parse_svg then _picofy_svg
+
+        mock_parsed_svg_instance.topicosvg.assert_called_once()
+        mock_picofied_svg_instance.tostring.assert_called_once_with(pretty_print=False)
+        assert remover_no_cairo.pico == mock_picofied_svg_instance
+        assert remover_no_cairo.svg_content == "<picofied_svg/>"
+
+    @mock.patch("svg_removeoverlap.remover.picosvg.svg.SVG")
+    def test_picofy_svg_handles_error(self, mock_picosvg_svg_class_for_parse, remover_no_cairo):
+        mock_parsed_svg_instance = mock.MagicMock()
+        mock_parsed_svg_instance.topicosvg.side_effect = Exception("Picofy failed")
+        mock_picosvg_svg_class_for_parse.fromstring.return_value = mock_parsed_svg_instance
+
+        remover_no_cairo.svg_content = "<svg_content_for_picofy>"
+        remover_no_cairo.picofy = True
+
+        with pytest.raises(SVGProcessingError, match="Failed during picosvg simplification"):
+            remover_no_cairo._prep_pico()
+
+    def test_prep_pico_calls_parse_and_picofy(self, remover_no_cairo):
+        remover_no_cairo.svg_content = "<svg></svg>"
+        remover_no_cairo.picofy = True # Ensure _picofy_svg is also called
+
+        with mock.patch.object(remover_no_cairo, '_parse_svg') as mock_parse, \
+             mock.patch.object(remover_no_cairo, '_picofy_svg') as mock_picofy:
+
+            remover_no_cairo._prep_pico()
+
+            mock_parse.assert_called_once()
+            mock_picofy.assert_called_once()
+
+    def test_filter_pico_shapes(self, remover_no_cairo):
+        # Mock shapes
+        shape1 = mock.MagicMock(style="fill:red;", fill="") # Red
+        shape2 = mock.MagicMock(style="fill:white;", fill="") # White
+        shape3 = mock.MagicMock(style="", fill="blue") # Blue
+        shape4 = mock.MagicMock(style="fill:#FFFFFF;", fill="") # White (hex)
+        shape5 = mock.MagicMock(style="fill:transparent;", fill="") # Transparent
+        shape6 = mock.MagicMock(style="fill:none", fill="") # None
+        shape7 = mock.MagicMock(style="fill:rgb(0,0,0)", fill="") # Black
+
+        all_shapes = [shape1, shape2, shape3, shape4, shape5, shape6, shape7]
+
+        # Mock remover.pico.shapes()
+        remover_no_cairo.pico = mock.MagicMock()
+        remover_no_cairo.pico.shapes.return_value = all_shapes
+
+        # Test 1: keep_white = False (default)
+        remover_no_cairo.keep_white = False
+        # Default skip_svg_fills includes "white", "#ffffff", "transparent", "none", etc.
+        filtered_shapes = remover_no_cairo._filter_pico_shapes()
+        assert shape1 in filtered_shapes # red
+        assert shape2 not in filtered_shapes # white
+        assert shape3 in filtered_shapes # blue
+        assert shape4 not in filtered_shapes # #FFFFFF
+        assert shape5 not in filtered_shapes # transparent
+        assert shape6 not in filtered_shapes # none
+        assert shape7 in filtered_shapes # black
+        assert len(filtered_shapes) == 3
+
+        # Test 2: keep_white = True
+        remover_no_cairo.keep_white = True
+        filtered_shapes_keep_white = remover_no_cairo._filter_pico_shapes()
+        # Should keep white, but still skip "transparent" and "none" based on default skip_svg_fills
+        assert shape1 in filtered_shapes_keep_white
+        assert shape2 in filtered_shapes_keep_white # white is kept
+        assert shape3 in filtered_shapes_keep_white
+        assert shape4 in filtered_shapes_keep_white # #FFFFFF is kept
+        assert shape5 not in filtered_shapes_keep_white # transparent is still skipped
+        assert shape6 not in filtered_shapes_keep_white # none is still skipped
+        assert shape7 in filtered_shapes_keep_white
+        assert len(filtered_shapes_keep_white) == 5
+
+        # Test 3: Custom skip_svg_fills
+        remover_no_cairo.keep_white = False # Reset
+        remover_no_cairo.skip_svg_fills = ["red", "blue"] # Custom skip
+        filtered_shapes_custom_skip = remover_no_cairo._filter_pico_shapes()
+        assert shape1 not in filtered_shapes_custom_skip # red is skipped
+        assert shape2 in filtered_shapes_custom_skip # white is kept (not in custom skip)
+        assert shape3 not in filtered_shapes_custom_skip # blue is skipped
+        assert shape4 in filtered_shapes_custom_skip # #FFFFFF is kept
+        assert shape5 in filtered_shapes_custom_skip # transparent is kept
+        assert shape6 in filtered_shapes_custom_skip # none is kept
+        assert shape7 in filtered_shapes_custom_skip # black is kept
+        assert len(filtered_shapes_custom_skip) == 5
+
+    @mock.patch("svg_removeoverlap.remover.picosvg.svg_pathops.union")
+    @mock.patch("svg_removeoverlap.remover.picosvg.svg.SVGPath")
+    @mock.patch("svg_removeoverlap.remover.etree") # To mock etree.Element and SubElement
+    def test_remove_overlaps_pico_non_sequential(self, mock_etree, mock_svgpath_class, mock_union, remover_no_cairo):
+        # Setup remover instance
+        remover_no_cairo.svg_content = "<svg viewBox='0 0 100 100'><path d='dummy'/></svg>" # Needs some content to parse
+
+        # Mock _prep_pico to set up a mock pico object
+        mock_pico_instance = mock.MagicMock()
+        mock_pico_instance.svg_root.attrib = {'viewBox': '0 0 100 100', 'xmlns': 'http://www.w3.org/2000/svg'}
+        mock_pico_instance.view_box = (0, 0, 100, 100)
+
+        # Mock _filter_pico_shapes to return some mock shapes
+        shape1 = mock.MagicMock(name="shape1")
+        shape2 = mock.MagicMock(name="shape2")
+        mock_filtered_shapes = [shape1, shape2]
+
+        with mock.patch.object(remover_no_cairo, '_prep_pico', autospec=True) as mock_prep_pico_method, \
+             mock.patch.object(remover_no_cairo, '_filter_pico_shapes', return_value=mock_filtered_shapes) as mock_filter_shapes_method:
+            # Ensure self.pico is set by the mocked _prep_pico
+            def side_effect_prep_pico():
+                remover_no_cairo.pico = mock_pico_instance
+            mock_prep_pico_method.side_effect = side_effect_prep_pico
+
+            # Mock return value of picosvg.svg_pathops.union
+            mock_unioned_shape_commands = [('M', (0,0))] # Dummy commands
+            mock_union.return_value = mock_unioned_shape_commands
+
+            # Mock SVGPath.from_commands().d
+            mock_svgpath_instance = mock.MagicMock()
+            mock_svgpath_instance.d = "M0,0 Z" # Dummy d string
+            mock_svgpath_class.from_commands.return_value = mock_svgpath_instance
+
+            # Mock etree Elements
+            mock_new_root_element = mock.MagicMock(name="new_root_svg_element")
+            mock_etree.Element.return_value = mock_new_root_element
+            mock_path_el = mock.MagicMock(name="new_path_element")
+            mock_etree.SubElement.return_value = mock_path_el
+
+            # Mock the SVG class constructor used for new_svg
+            with mock.patch("svg_removeoverlap.remover.picosvg.svg.SVG") as mock_final_svg_constructor:
+                mock_final_svg_instance = mock.MagicMock(name="final_svg_object")
+                mock_final_svg_instance.tostring.return_value = "<svg_final_output/>"
+                mock_final_svg_constructor.return_value = mock_final_svg_instance
+
+                # Call the method under test
+                remover_no_cairo.remove_overlaps_pico(sequential=False)
+
+                mock_prep_pico_method.assert_called_once()
+                mock_filter_shapes_method.assert_called_once()
+
+                # Check union call
+                mock_union.assert_called_once_with(mock_filtered_shapes, ["nonzero", "nonzero"])
+                mock_svgpath_class.from_commands.assert_called_once_with(mock_unioned_shape_commands)
+
+                # Check etree usage
+                mock_etree.Element.assert_called_once_with("svg")
+                assert mock_new_root_element.set.call_count == 2 # viewBox, xmlns
+                mock_new_root_element.set.assert_any_call('viewBox', '0 0 100 100')
+                mock_new_root_element.set.assert_any_call('xmlns', 'http://www.w3.org/2000/svg')
+
+                mock_etree.SubElement.assert_called_once_with(mock_new_root_element, "path")
+                mock_path_el.set.assert_called_once_with("d", "M0,0 Z")
+
+                # Check final SVG object creation and output
+                mock_final_svg_constructor.assert_called_once_with(mock_new_root_element)
+                assert mock_final_svg_instance.view_box == (0,0,100,100)
+                assert remover_no_cairo.svg_content == "<svg_final_output/>"
+                assert remover_no_cairo.pico == mock_final_svg_instance
+
+    # TODO: Add test for sequential=True mode in remove_overlaps_pico
+    # This will involve similar mocking but checking that union is called multiple times in a loop.
+
+    # - Different options (sequential, keep_white) are partially covered by _filter_pico_shapes
+    #   and can be further tested via integration tests.
+    pass
 </file>
 
 <file path=".coveragerc">
@@ -1438,7 +1598,7 @@ exclude: '^docs/conf.py'
 
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v4.4.0
+  rev: v4.6.0
   hooks:
   - id: trailing-whitespace
   - id: check-added-large-files
@@ -1455,14 +1615,14 @@ repos:
 
 ## If you want to automatically "modernize" your Python code:
 # - repo: https://github.com/asottile/pyupgrade
-#   rev: v3.3.1
+#   rev: v3.15.2 # Updated rev
 #   hooks:
 #   - id: pyupgrade
-#     args: ['--py37-plus']
+#     args: ['--py38-plus'] # Updated to py38-plus
 
 ## If you want to avoid flake8 errors due to unused vars or imports:
 # - repo: https://github.com/PyCQA/autoflake
-#   rev: v2.0.0
+#   rev: v2.3.1 # Updated rev
 #   hooks:
 #   - id: autoflake
 #     args: [
@@ -1472,25 +1632,26 @@ repos:
 #     ]
 
 - repo: https://github.com/PyCQA/isort
-  rev: 5.11.4
+  rev: 5.13.2
   hooks:
   - id: isort
+    args: ["--profile", "black"] # Ensure isort profile matches black
 
 - repo: https://github.com/psf/black
-  rev: stable
+  rev: 24.4.2
   hooks:
   - id: black
     language_version: python3
 
 ## If like to embrace black styles even in the docs:
 # - repo: https://github.com/asottile/blacken-docs
-#   rev: v1.13.0
+#   rev: v1.16.0 # Updated rev
 #   hooks:
 #   - id: blacken-docs
-#     additional_dependencies: [black]
+#     additional_dependencies: [black==24.4.2] # Match black version
 
 - repo: https://github.com/PyCQA/flake8
-  rev: 5.0.4
+  rev: 7.0.0
   hooks:
   - id: flake8
   ## You can add flake8 plugins via `additional_dependencies`:
@@ -1498,9 +1659,16 @@ repos:
 
 ## Check for misspells in documentation files:
 # - repo: https://github.com/codespell-project/codespell
-#   rev: v2.2.2
+#   rev: v2.2.6 # Updated rev
 #   hooks:
 #   - id: codespell
+
+- repo: https://github.com/pre-commit/mirrors-mypy
+  rev: v1.9.0 # Match mypy version if possible
+  hooks:
+  - id: mypy
+    args: [--no-strict-optional] # --ignore-missing-imports is in mypy.ini
+    # additional_dependencies: [lxml-stubs] # If needed
 </file>
 
 <file path=".readthedocs.yml">
@@ -1525,7 +1693,7 @@ formats:
 build:
   os: ubuntu-22.04
   tools:
-    python: "3.11"
+    python: "3.11" # Keep this aligned with a recent, tested Python version
 
 python:
   install:
@@ -1743,6 +1911,37 @@ Apache License
    limitations under the License.
 </file>
 
+<file path="mypy.ini">
+[mypy]
+python_version = 3.8
+warn_return_any = True
+warn_unused_configs = True
+ignore_missing_imports = True
+# show_error_codes = True # Useful for debugging specific errors
+
+# Per-module settings for libraries that might cause issues
+[mypy-fire.*]
+ignore_missing_imports = True
+
+[mypy-cairosvg.*]
+ignore_missing_imports = True
+
+[mypy-picosvg.*]
+ignore_missing_imports = True
+
+[mypy-tinycss2.*]
+ignore_missing_imports = True
+
+[mypy-tqdm.*]
+ignore_missing_imports = True
+# lxml has stubs (lxml-stubs), so we might not need to ignore it if stubs are added.
+# For now, if lxml-stubs are not explicitly added as a dependency,
+# mypy might complain or treat lxml as Any.
+# If using lxml-stubs, remove lxml from ignore list if added.
+# [mypy-lxml.*]
+# ignore_missing_imports = True
+</file>
+
 <file path="pyproject.toml">
 [build-system]
 # AVOID CHANGING REQUIRES: IT WILL BE UPDATED BY PYSCAFFOLD!
@@ -1915,20 +2114,19 @@ package_dir =
     =src
 
 # Require a min/specific Python version (comma-separated conditions)
-# python_requires = >=3.8
+python_requires = >=3.8
 
 # Add here dependencies of your project (line-separated), e.g. requests>=2.2,<3.0.
 # Version specifiers like >=2.2,<3.0 avoid problems due to API changes in
 # new major versions. This works if the required packages follow Semantic Versioning.
 # For more information, check out https://semver.org/.
 install_requires =
-    importlib-metadata; python_version<"3.8"
-    CairoSVG>=2.6.0
+    CairoSVG>=2.7.1
     fire>=0.5.0
-    lxml>=4.9.2
+    lxml>=5.1.0
     picosvg>=0.20.6
     tinycss2>=1.2.1
-    tqdm>=4.65.0
+    tqdm>=4.66.2
 
 
 [options.packages.find]
@@ -1943,9 +2141,11 @@ exclude =
 
 # Add here test requirements (semicolon/line-separated)
 testing =
-    setuptools
-    pytest
-    pytest-cov
+    setuptools>=69.0.0
+    pytest>=8.0.0
+    pytest-cov>=4.1.0
+    mypy>=1.9.0
+    # Consider adding lxml-stubs if mypy has trouble with lxml
 
 [options.entry_points]
 # Add here console scripts like:

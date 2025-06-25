@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 import logging
+import sys # For sys.exit and sys.stderr
 from pathlib import Path
 from typing import Union
 
 import fire
 
-from .remover import RemoveOverlapsSVG
+from .remover import RemoveOverlapsSVG, SVGProcessingError
 
 
 def remove_overlaps(
@@ -38,15 +39,43 @@ def remove_overlaps(
             level=logging.WARNING, format="%(levelname)s: %(message)s"
         )
 
-    # The verbose flag in RemoveOverlapsSVG is now primarily for tqdm visibility
-    remover = RemoveOverlapsSVG(
-        cairo=cairo, picofy=picofy, keep_white=keep_white, verbose=verbose
-    )
-    remover.load_svg(Path(input_svg))
-    remover.remove(sequential=sequential)
-    remover.save_svg(Path(output_svg))
+    input_p = Path(input_svg)
+    output_p = Path(output_svg)
+
+    try:
+        # The verbose flag in RemoveOverlapsSVG is now primarily for tqdm visibility
+        remover = RemoveOverlapsSVG(
+            cairo=cairo, picofy=picofy, keep_white=keep_white, verbose=verbose
+        )
+        remover.load_svg(input_p)
+        remover.remove(sequential=sequential)
+        remover.save_svg(output_p)
+        logger.info(f"Successfully processed SVG and saved to {output_p}")
+        # For non-verbose, a simple print to stdout might be preferred for success
+        if not verbose:
+            print(f"Output SVG saved to: {output_p}")
+
+    except SVGProcessingError as e:
+        logger.error(f"An error occurred during SVG processing: {e}")
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except FileNotFoundError as e:
+        logger.error(f"File error: {e}")
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as e: # Catch other value errors that might not be SVGProcessingError
+        logger.error(f"Invalid input or value: {e}")
+        print(f"Error: Invalid input - {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e: # Catch-all for any other unexpected errors
+        logger.error(f"An unexpected error occurred: {e}", exc_info=verbose) # Log traceback if verbose
+        print(f"An unexpected error occurred: {e}", file=sys.stderr)
+        sys.exit(1)
+
 
 def cli():
+    # Configure Fire to use custom display for help and error messages
+    # This ensures that Fire's output (like help text) goes to stdout as expected.
     fire.core.Display = lambda lines, out: print(*lines, file=out)
     fire.Fire(remove_overlaps)
 
