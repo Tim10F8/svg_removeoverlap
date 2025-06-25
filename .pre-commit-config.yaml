@@ -61,15 +61,18 @@ repos:
   ## You can add flake8 plugins via `additional_dependencies`:
   #  additional_dependencies: [flake8-bugbear]
 
-## Check for misspells in documentation files:
-# - repo: https://github.com/codespell-project/codespell
-#   rev: v2.2.6 # Updated rev
-#   hooks:
-#   - id: codespell
+# Check for misspells in documentation files:
+- repo: https://github.com/codespell-project/codespell
+  rev: v2.2.6 # Updated rev
+  hooks:
+  - id: codespell
+    args:
+      - --skip="./llms.txt,./*.svg,./pyproject.toml" # Skip known problematic files/types
+      - --ignore-words-list= प्ले # Example: ignore specific words if needed
 
 - repo: https://github.com/pre-commit/mirrors-mypy
   rev: v1.9.0 # Match mypy version if possible
   hooks:
   - id: mypy
     args: [--no-strict-optional] # --ignore-missing-imports is in mypy.ini
-    # additional_dependencies: [lxml-stubs] # If needed
+    additional_dependencies: [lxml-stubs>=0.5.1] # If needed
