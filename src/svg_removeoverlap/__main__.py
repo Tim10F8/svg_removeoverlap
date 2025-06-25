@@ -2,7 +2,6 @@
 import logging
 import sys # For sys.exit and sys.stderr
 from pathlib import Path
-from typing import Union
 
 import fire
 
@@ -10,8 +9,8 @@ from .remover import RemoveOverlapsSVG, SVGProcessingError
 
 
 def remove_overlaps(
-    input_svg: Union[str, Path],
-    output_svg: Union[str, Path],
+    input_svg: str | Path,
+    output_svg: str | Path,
     sequential: bool = False,
     keep_white: bool = False,
     cairo: bool = True,
@@ -73,12 +72,13 @@ def remove_overlaps(
         sys.exit(1)
 
 
+
 def cli():
     # Configure Fire to use custom display for help and error messages
     # This ensures that Fire's output (like help text) goes to stdout as expected.
     fire.core.Display = lambda lines, out: print(*lines, file=out)
     fire.Fire(remove_overlaps)
 
+
 if __name__ == "__main__":
     cli()
-    

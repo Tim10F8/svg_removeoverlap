@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
 import logging
-from pathlib import Path
 import sys
-from typing import List, Union, Optional
+from pathlib import Path
 
 import picosvg.svg
 import picosvg.svg_pathops
+import tinycss2
 from lxml import etree
 from tqdm import tqdm
-import tinycss2
 
 logger = logging.getLogger(__name__)
 
-class SVGProcessingError(Exception):
-    """Custom exception for errors during SVG processing."""
-    pass
 
 def get_css_fill(style: str) -> str:
     """Extract the fill value from a CSS style string.
@@ -39,13 +35,14 @@ def get_css_fill(style: str) -> str:
         logger.warning(f"Could not parse style declaration for fill: '{style}'")
         return ""
 
+
 class RemoveOverlapsSVG:
     def __init__(
         self,
         cairo: bool = True,
         picofy: bool = False,
         keep_white: bool = False,
-        skip_svg_fills: Optional[List[str]] = None,
+        skip_svg_fills: list[str] = None,
         verbose: bool = False,
     ) -> None:
         """Initialize RemoveOverlapsSVG class.
@@ -57,7 +54,7 @@ class RemoveOverlapsSVG:
             skip_svg_fills (Optional[List[str]], optional): List of fill values to skip. Defaults to a list of common white and transparent fill values.
             verbose (bool, optional): Enable verbose logging. Defaults to False.
         """
-        default_skip_fills = [
+        self.skip_svg_fills: list[str] = skip_svg_fills or [
             "white",
             "rgb(255,255,255)",
             "rgb(100%,100%,100%)",
@@ -138,7 +135,7 @@ class RemoveOverlapsSVG:
             # For now, just raise the more generic error.
             raise SVGProcessingError(f"An unexpected error occurred with CairoSVG processing: {e}") from e
 
-    def save_svg(self, output_path: Union[str, Path]) -> None:
+    def save_svg(self, output_path: str | Path) -> None:
         """Save the SVG content to a file.
 
         Args:
@@ -150,7 +147,7 @@ class RemoveOverlapsSVG:
         with open(output_path, "w") as output_file:
             output_file.write(self.svg_content)
 
-    def load_svg(self, input_path: Union[str, Path]) -> None:
+    def load_svg(self, input_path: str | Path) -> None:
         """Load an SVG file and read its content.
 
         Args:
@@ -168,7 +165,7 @@ class RemoveOverlapsSVG:
             raise NotADirectoryError(f"The input path {input_path} is not a file.")
 
         logger.info(f"Reading {input_path}...")
-        with open(input_path, "r") as svg_file:
+        with open(input_path) as svg_file:
             self.svg_content = svg_file.read()
         if self.cairo:
             self._prep_svg_cairo()
@@ -230,47 +227,6 @@ class RemoveOverlapsSVG:
             if (self.keep_white) or (fill not in self.skip_svg_fills):
                 shapes.append(shape)
         return shapes
-
-
-    def _rebuild_svg_from_shape(self, unioned_shape_commands: List) -> None:
-        """Rebuilds the SVG content from a list of path commands.
-
-        Args:
-            unioned_shape_commands (List): List of path commands from picosvg.
-        """
-        if self.pico is None or self.pico.svg_root is None:
-            raise SVGProcessingError("Original PicoSVG object or its root not available for rebuilding SVG.")
-
-        try:
-            union_d = picosvg.svg.SVGPath.from_commands(unioned_shape_commands).d
-        except Exception as e:
-            logger.error(f"Error converting new shape commands to path 'd' attribute: {e}")
-            raise SVGProcessingError(f"Failed to construct path data from unioned shape commands: {e}") from e
-
-        # Create a new SVG root, copying attributes from the original
-        new_root = etree.Element("svg")
-        # Ensure xmlns is present, as picosvg.SVG might not always add it back if missing from original attrib
-        new_root.set("xmlns", "http://www.w3.org/2000/svg")
-        for a, v in self.pico.svg_root.attrib.items():
-            # Prioritize new xmlns, avoid overwriting if 'xmlns' was in original attribs with a different value (unlikely for svg root)
-            if a.lower() != "xmlns":
-                new_root.set(a, v)
-
-        new_svg_obj = picosvg.svg.SVG(new_root)
-        if self.pico.view_box is not None:
-            new_svg_obj.view_box = self.pico.view_box
-
-        path_el = etree.SubElement(new_root, "path")
-        path_el.set("d", union_d)
-        # Potentially set a default fill/stroke if desired, e.g., black
-        # path_el.set("fill", "black")
-
-        self.pico = new_svg_obj  # Update self.pico to the new SVG structure
-        if self.pico is None:  # Should not happen with picosvg.svg.SVG constructor
-            raise SVGProcessingError("SVG object became None unexpectedly after rebuilding.")
-
-        self.svg_content = self.pico.tostring(pretty_print=True)
-
 
     def remove_overlaps_pico(self, sequential: bool = False) -> None:
         """Remove overlaps in the SVG using picosvg.
@@ -346,4 +302,3 @@ class RemoveOverlapsSVG:
             sequential (bool, optional): Remove overlaps sequentially. Defaults to False.
         """
         self.remove_overlaps_pico(sequential=sequential)
-
